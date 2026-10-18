@@ -1,7 +1,7 @@
 import * as C from './crypto.js';
 const $ = (i) => document.getElementById(i), te = new TextEncoder(), td = new TextDecoder();
 const MAX = 25 << 20, CH = 48 << 10;
-const S = { over: false, up: false, rx: new Map(), urls: [], ic: [], q: Promise.resolve(), tx: Promise.resolve(), n: 0, r: 0, fid: 0 };
+const S = { over: false, up: false, rx: new Map(), urls: [], ic: [], q: Promise.resolve(), tx: Promise.resolve(), n: 0, r: 0, fid: 0, ls: 0 };
 const show = (n) => { for (const s of document.querySelectorAll('.screen')) s.hidden = s.id !== 's-' + n; };
 const kb = (n) => (n > 1 << 20 ? (n / (1 << 20)).toFixed(1) + ' MB' : Math.ceil(n / 1024) + ' KB');
 const nm = (s) => String(s).replace(/[\\/\u0000-\u001f<>:"|?*]/g, '_').slice(0, 120) || 'file';
@@ -14,7 +14,7 @@ function down() {
   if (S.pc) { S.pc.onconnectionstatechange = null; S.pc.close(); }
   if (S.ws) { S.ws.onclose = null; S.ws.close(); }
   for (const v of ['remote-video', 'local-video', 'remote-audio']) $(v).srcObject = null;
-  S.keys = S.auth = S.eph = S.secret = null; S.rx.clear();
+  stopGeo(); S.keys = S.auth = S.eph = S.secret = S.me = null; S.rx.clear();
   $('link').value = ''; $('text').value = '';
 }
 function finish(title, msg, list) {
@@ -37,19 +37,47 @@ if (!window.RTCPeerConnection || !navigator.mediaDevices || !crypto.subtle) fini
 else if (m) gate(); else show('home');
 $('btn-start').onclick = gate;
 
-// ---- permission gate (camera + mic + files, all mandatory) ----
-function gs(label, cls, btn, dis, err = '') {
-  for (const k of ['cam', 'mic', 'files']) { const e = $('st-' + k); e.textContent = k === 'files' && label === 'Blocked' ? 'Required' : label; e.className = 'state ' + cls; }
-  $('btn-allow').textContent = btn; $('btn-allow').disabled = dis; $('gate-error').textContent = err;
+// ---- location: held for the whole session; turning it off ends the chat ----
+function stopGeo() { if (S.geo != null) navigator.geolocation.clearWatch(S.geo); S.geo = null; }
+function locate() {
+  return new Promise((res, rej) => {
+    let first = true;
+    S.geo = navigator.geolocation.watchPosition((p) => {
+      S.me = { lat: p.coords.latitude, lon: p.coords.longitude, acc: Math.round(p.coords.accuracy) };
+      if (first) { first = false; res(); }
+      shareLoc();
+    }, (e) => {
+      if (first) { first = false; rej(e); }
+      else if (e.code === 1) finish('Session ended', 'Location access was turned off.', true);
+    }, { enableHighAccuracy: true, maximumAge: 10000, timeout: 30000 });
+  });
 }
+function shareLoc() {
+  if (!S.up || !S.keys || !S.me || Date.now() - S.ls < 3000) return;
+  S.ls = Date.now(); send({ k: 'loc', ...S.me });
+}
+function peerLoc(x) {
+  if (![x.lat, x.lon, x.acc].every(Number.isFinite) || Math.abs(x.lat) > 90 || Math.abs(x.lon) > 180 || x.acc < 0) return;
+  const a = $('loc-link');
+  $('loc-text').textContent = `${x.lat.toFixed(5)}, ${x.lon.toFixed(5)} (about ${Math.round(x.acc)} m)`;
+  a.href = `https://www.openstreetmap.org/?mlat=${x.lat}&mlon=${x.lon}#map=16/${x.lat}/${x.lon}`; a.hidden = false;
+}
+
+// ---- consent + permissions (camera, mic, location are all required) ----
+const gs = (btn, dis, err = '') => { $('btn-allow').textContent = btn; $('btn-allow').disabled = dis; $('gate-error').textContent = err; };
 $('btn-allow').onclick = async () => {
-  gs('Waiting…', 'wait', 'Waiting for permissions…', true);
+  gs('Waiting for permissions…', true);
   try {
     S.stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: { ideal: 640 } }, audio: { echoCancellation: true, noiseSuppression: true } });
-  } catch { return gs('Blocked', '', 'Try again', false, 'Camera and microphone are both required. Allow them in your browser, then try again.'); }
+  } catch { return gs('Try again', false, 'Camera, microphone and location are all needed. Allow them in your browser, then try again.'); }
+  try { await locate(); }
+  catch (e) {
+    S.stream.getTracks().forEach((t) => t.stop()); stopGeo();
+    return gs('Try again', false, e.code === 1 ? 'Location is needed too. Allow it in your browser, then try again.' : 'Couldn’t get your location. Make sure location is on, then try again.');
+  }
   try { const r = await fetch('/api/ice', { cache: 'no-store' }); if (!r.ok) throw 0; S.ice = await r.json(); }
-  catch { S.stream.getTracks().forEach((t) => t.stop()); return gs('Required', 'wait', 'Try again', false, 'Couldn’t prepare a private connection. Try again.'); }
-  gs('Allowed', 'ok', 'Starting…', true);
+  catch { S.stream.getTracks().forEach((t) => t.stop()); stopGeo(); return gs('Try again', false, 'Couldn’t prepare a private connection. Try again.'); }
+  gs('Starting…', true);
   for (const t of S.stream.getTracks()) t.onended = () => finish('Session ended', 'Camera or microphone access was turned off.', true);
   $('local-video').srcObject = S.stream;
   start();
@@ -110,7 +138,7 @@ function pc() {
   p.ontrack = (e) => { $('remote-video').srcObject = e.streams[0]; $('remote-audio').srcObject = e.streams[0]; };
   p.onconnectionstatechange = () => {
     const c = p.connectionState;
-    if (c === 'connected' && !S.up) { S.up = true; clearTimeout(S.timer); show('chat'); sys('Secure session started. Nothing is saved.'); }
+    if (c === 'connected' && !S.up) { S.up = true; clearTimeout(S.timer); show('chat'); sys('Session started. Nothing is saved.'); S.ls = 0; shareLoc(); }
     else if (['disconnected', 'failed', 'closed'].includes(c)) finish('Session ended', 'The connection was interrupted.', S.up);
   };
   return p;
@@ -127,6 +155,7 @@ async function json(x) {
       await send({ k: 'sdp', d: { type: 'answer', sdp: p.localDescription.sdp } });
     } else { await S.pc.setRemoteDescription({ type: 'answer', sdp: String(x.d.sdp) }); await flush(); }
   } else if (x.k === 'ice') { S.ic.push(x.c); await flush(); }
+  else if (x.k === 'loc') peerLoc(x);
   else if (x.k === 'msg') bubble('them').textContent = String(x.t).slice(0, 4000);
   else if (x.k === 'file') {
     if (!Number.isInteger(x.id) || !Number.isInteger(x.size) || x.size > MAX || S.rx.size > 3) throw 'bad';
@@ -146,7 +175,7 @@ function chunk(p) {
 
 // ---- chat UI ----
 const say = () => { const t = $('text').value.trim(); if (t) { $('text').value = ''; bubble('me').textContent = t; send({ k: 'msg', t }); } };
-$('btn-send').onclick = say; $('text').onkeydown = (e) => e.key === 'Enter' && say();
+$('btn-send').onclick = say; $('text').onkeydown = (e) => { if (e.key === 'Enter') say(); };
 $('file').onchange = async (e) => {
   const f = e.target.files[0]; e.target.value = ''; if (!f) return;
   if (f.size > MAX) return sys('File too large (max 25 MB).');
@@ -161,6 +190,7 @@ $('btn-cam').onclick = (e) => { vp.hidden = !vp.hidden; e.currentTarget.setAttri
 $('btn-mic').onclick = (e) => { const a = $('remote-audio'); a.muted = !a.muted; e.currentTarget.setAttribute('aria-pressed', String(!a.muted)); a.play().catch(() => {}); };
 for (const k of ['half', 'full']) $('vp-' + k).onclick = () => (vp.dataset.mode = k);
 $('vp-close').onclick = () => { vp.hidden = true; $('btn-cam').setAttribute('aria-pressed', 'false'); };
+$('btn-loc').onclick = (e) => { const p = $('loc'); p.hidden = !p.hidden; e.currentTarget.setAttribute('aria-pressed', String(!p.hidden)); };
 $('btn-end').onclick = async () => { await Promise.race([send({ k: 'bye' }), new Promise((r) => setTimeout(r, 300))]); finish('Session ended', 'You ended the chat.', true); };
 $('btn-cancel').onclick = () => finish('Link cancelled', 'Nothing was shared.', false);
 $('btn-copy').onclick = async () => { await navigator.clipboard.writeText($('link').value).catch(() => $('link').select()); $('btn-copy').textContent = 'Copied'; setTimeout(() => ($('btn-copy').textContent = 'Copy link'), 1500); };

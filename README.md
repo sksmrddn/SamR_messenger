@@ -21,5 +21,5 @@ With these set the app forces relay-only media. Without them, video goes peer-to
 - Each browser makes fresh ECDH keys; the secret authenticates them (HMAC), so a server in the middle can't swap keys. Session keys (AES-GCM, one per direction) exist only in memory.
 - Chat, files and call signaling are encrypted before they reach the relay. Video/audio use WebRTC (DTLS-SRTP).
 - The relay accepts exactly two sockets. Any disconnect deletes the room and leaves a tombstone (24h) so the link can't be reused. Unclaimed links expire after 30 min.
-- Session ends on: End chat, tab close/refresh, connection drop, or camera/mic revoked. Tab switching does not end it.
+- Session ends on: End chat, tab close/refresh, connection drop, or camera/mic/location turned off. Tab switching does not end it.
 - Strict CSP, no third-party scripts, nothing stored in the browser.

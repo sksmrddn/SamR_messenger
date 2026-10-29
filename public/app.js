@@ -1,7 +1,7 @@
 import * as C from './crypto.js';
 const $ = (i) => document.getElementById(i), te = new TextEncoder(), td = new TextDecoder();
 const MAX = 25 << 20, CH = 48 << 10;
-const S = { over: false, up: false, rx: new Map(), urls: [], ic: [], q: Promise.resolve(), tx: Promise.resolve(), n: 0, r: 0, fid: 0, ls: 0 };
+const S = { over: false, up: false, rx: new Map(), urls: [], ic: [], q: Promise.resolve(), tx: Promise.resolve(), n: 0, r: 0, fid: 0, ls: 0, ln: 0, facing: 'user' };
 const show = (n) => { for (const s of document.querySelectorAll('.screen')) s.hidden = s.id !== 's-' + n; };
 const kb = (n) => (n > 1 << 20 ? (n / (1 << 20)).toFixed(1) + ' MB' : Math.ceil(n / 1024) + ' KB');
 const nm = (s) => String(s).replace(/[\\/\u0000-\u001f<>:"|?*]/g, '_').slice(0, 120) || 'file';
@@ -16,6 +16,7 @@ function down() {
   for (const v of ['remote-video', 'local-video', 'remote-audio']) $(v).srcObject = null;
   stopGeo(); S.keys = S.auth = S.eph = S.secret = S.me = null; S.rx.clear();
   S.wl?.release().catch(() => {}); S.wl = null; clearNotes();
+  S.mstream?.getTracks().forEach((t) => t.stop()); S.movie = null; $('mv-stage').replaceChildren(); $('mv').hidden = true; $('mchoose').hidden = true;
   $('link').value = ''; $('text').value = '';
 }
 function finish(title, msg, list) {
@@ -31,9 +32,9 @@ addEventListener('pagehide', () => { S.over = true; down(); });
 // ---- notifications (generic text only), screen wake lock, camera flip ----
 const onEnded = () => finish('Session ended', 'Camera or microphone access was turned off.', true);
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
-async function notify(body, tag) {
+async function notify(body, tag, vibrate) {
   if (!('Notification' in window) || Notification.permission !== 'granted' || !document.hidden) return;
-  const opts = { body, tag };
+  const opts = { body, tag, vibrate, renotify: true };
   try { const r = await navigator.serviceWorker.getRegistration(); if (r) return await r.showNotification('SamR messenger', opts); } catch {}
   try { new Notification('SamR messenger', opts); } catch {}
 }
@@ -51,22 +52,23 @@ document.addEventListener('visibilitychange', keepAwake);
 async function flip() {
   const b = $('btn-flip'); b.disabled = true;
   const old = S.stream.getVideoTracks()[0], st = old.getSettings();
+  const cur = st.facingMode || S.facing;
   const cams = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === 'videoinput');
-  const opts = [];
-  if (st.facingMode === 'user' || st.facingMode === 'environment') opts.push({ facingMode: { exact: st.facingMode === 'user' ? 'environment' : 'user' } });
   const i = cams.findIndex((d) => d.deviceId === st.deviceId);
+  const opts = [{ facingMode: { exact: cur === 'user' ? 'environment' : 'user' } }];
   if (cams.length > 1 && i >= 0) opts.push({ deviceId: { exact: cams[(i + 1) % cams.length].deviceId } });
-  if (st.deviceId) opts.push({ deviceId: { exact: st.deviceId } }); // last resort: get the old camera back
-  if (!opts.length) { b.disabled = false; return; }
+  const back = st.deviceId ? { deviceId: { exact: st.deviceId } } : { facingMode: cur };
   old.onended = null; old.stop(); // phones can't open two cameras at once
-  for (const v of opts) {
+  for (const v of [...opts, back]) {
     try {
       const nt = (await navigator.mediaDevices.getUserMedia({ video: { ...v, width: { ideal: 640 } } })).getVideoTracks()[0];
       nt.onended = onEnded;
       const snd = S.pc?.getSenders().find((x) => x.track === old);
       if (snd) await snd.replaceTrack(nt);
       S.stream.removeTrack(old); S.stream.addTrack(nt);
-      $('local-video').classList.toggle('back', nt.getSettings().facingMode === 'environment');
+      S.facing = nt.getSettings().facingMode || (v.facingMode ? v.facingMode.exact : S.facing);
+      $('local-video').classList.toggle('back', S.facing === 'environment');
+      if (v === back) sys('No other camera found.');
       b.disabled = false; return;
     } catch {}
   }
@@ -79,7 +81,7 @@ const m = /^#([\w-]{22})\.([\w-]{43})$/.exec(location.hash);
 S.role = m ? 'guest' : 'host';
 if (m) { S.room = m[1]; S.secret = C.b64d(m[2]); }
 history.replaceState(null, '', location.pathname);
-const gate = () => { show('gate'); $('accept').checked = false; $('btn-allow').disabled = true; $('gate-eyebrow').textContent = S.role === 'guest' ? 'You’re invited' : 'Before you start'; };
+const gate = () => { show('gate'); $('gate-eyebrow').textContent = S.role === 'guest' ? 'You’re invited' : 'Before you start'; };
 if (!window.RTCPeerConnection || !navigator.mediaDevices || !crypto.subtle) finish('Browser not supported', 'Open this in an up-to-date browser over HTTPS.', false);
 else if (m) gate(); else show('home');
 $('btn-start').onclick = gate;
@@ -111,7 +113,6 @@ function peerLoc(x) {
 }
 
 // ---- consent + permissions (camera, mic, location are all required) ----
-$('accept').onchange = () => { $('btn-allow').disabled = !$('accept').checked; };
 const gs = (btn, dis, err = '') => { $('btn-allow').textContent = btn; $('btn-allow').disabled = dis; $('gate-error').textContent = err; };
 $('btn-allow').onclick = async () => {
   gs('Waiting for permissions…', true);
@@ -128,7 +129,8 @@ $('btn-allow').onclick = async () => {
   catch { S.stream.getTracks().forEach((t) => t.stop()); stopGeo(); return gs('Try again', false, 'Couldn’t prepare a private connection. Try again.'); }
   gs('Starting…', true);
   for (const t of S.stream.getTracks()) t.onended = onEnded;
-  navigator.mediaDevices.enumerateDevices().then((d) => { $('btn-flip').hidden = d.filter((x) => x.kind === 'videoinput').length < 2; }).catch(() => {});
+  $('btn-flip').hidden = !(navigator.maxTouchPoints > 0);
+  navigator.mediaDevices.enumerateDevices().then((d) => { if (d.filter((x) => x.kind === 'videoinput').length > 1) $('btn-flip').hidden = false; }).catch(() => {});
   $('local-video').srcObject = S.stream;
   start();
 };
@@ -185,8 +187,15 @@ const send = (o) => tx(1, te.encode(JSON.stringify(o)));
 function pc() {
   const p = (S.pc = new RTCPeerConnection({ iceServers: S.ice.iceServers, iceTransportPolicy: S.ice.relayOnly ? 'relay' : 'all' }));
   for (const t of S.stream.getTracks()) p.addTrack(t, S.stream);
+  if (S.role === 'host') bindDC(p.createDataChannel('ctl'));
+  p.ondatachannel = (e) => bindDC(e.channel);
   p.onicecandidate = (e) => e.candidate && send({ k: 'ice', c: e.candidate.toJSON() });
-  p.ontrack = (e) => { $('remote-video').srcObject = e.streams[0]; $('remote-audio').srcObject = e.streams[0]; };
+  p.ontrack = (e) => {
+    const s = e.streams[0]; if (!s) return;
+    if (s.id === S.msid) { const v = S.movie?.el; if (v && v.tagName === 'VIDEO') { v.srcObject = s; v.play().catch(() => {}); } return; }
+    if (S.camid && s.id !== S.camid) return;
+    S.camid = s.id; $('remote-video').srcObject = s; $('remote-audio').srcObject = s;
+  };
   p.onconnectionstatechange = () => {
     const c = p.connectionState;
     if (c === 'connected' && !S.up) { S.up = true; clearTimeout(S.timer); show('chat'); sys('Session started. Nothing is saved.'); S.ls = 0; shareLoc(); }
@@ -206,6 +215,7 @@ async function json(x) {
       await send({ k: 'sdp', d: { type: 'answer', sdp: p.localDescription.sdp } });
     } else { await S.pc.setRemoteDescription({ type: 'answer', sdp: String(x.d.sdp) }); await flush(); }
   } else if (x.k === 'ice') { S.ic.push(x.c); await flush(); }
+  else if (x.k === 'nudge') nudged();
   else if (x.k === 'loc') peerLoc(x);
   else if (x.k === 'msg') { bubble('them').textContent = String(x.t).slice(0, 4000); notify('New message', 'msg'); }
   else if (x.k === 'file') {
@@ -243,6 +253,122 @@ $('btn-mic').onclick = (e) => { const a = $('remote-audio'); a.muted = !a.muted;
 for (const k of ['half', 'full']) $('vp-' + k).onclick = () => (vp.dataset.mode = k);
 $('vp-close').onclick = () => { vp.hidden = true; $('btn-cam').setAttribute('aria-pressed', 'false'); };
 $('btn-loc').onclick = (e) => { const p = $('loc'); p.hidden = !p.hidden; e.currentTarget.setAttribute('aria-pressed', String(!p.hidden)); };
+// ---- nudge ----
+function nudged() {
+  const t = Date.now(); if (t - S.ln < 2000) return; S.ln = t;
+  sys('They nudged you.');
+  if (document.hidden) return notify('Nudge', 'nudge', [200, 100, 200, 100, 400]);
+  navigator.vibrate?.([200, 100, 200, 100, 400]);
+  const c = $('s-chat'); c.classList.add('shake'); setTimeout(() => c.classList.remove('shake'), 600);
+}
+$('btn-nudge').onclick = () => { const b = $('btn-nudge'); b.disabled = true; setTimeout(() => (b.disabled = false), 3000); send({ k: 'nudge' }); sys('You nudged them.'); };
+
+// ---- watch together: controls and the movie itself go device to device (data channel / WebRTC), never through the relay ----
+const YT = /^[\w-]{11}$/;
+const bindDC = (dc) => { S.dc = dc; dc.onmessage = (e) => { try { if (typeof e.data === 'string' && e.data.length < 4000) movieMsg(JSON.parse(e.data)); } catch {} }; };
+const dsend = (o) => { if (S.dc?.readyState === 'open') S.dc.send(JSON.stringify(o)); };
+function parseLink(s) {
+  let u; try { u = new URL(String(s).trim()); } catch { return null; }
+  if (u.protocol !== 'https:') return null;
+  const h = u.hostname.replace(/^(www|m)\./, '');
+  if (h === 'youtu.be' || h === 'youtube.com') {
+    const id = h === 'youtu.be' ? u.pathname.slice(1) : u.searchParams.get('v') || u.pathname.split('/').pop();
+    return YT.test(id) ? { mode: 'yt', id } : null;
+  }
+  return /\.(mp4|webm|m4v|ogv)$/i.test(u.pathname) ? { mode: 'url', url: u.href } : null;
+}
+const cur2 = () => { const M = S.movie, e = M.el; return e.tagName === 'VIDEO' ? e.currentTime : M.base + (M.since ? (Date.now() - M.since) / 1000 : 0); };
+function run(a, t) {
+  const M = S.movie, e = M.el;
+  if (e.tagName === 'VIDEO') {
+    if (Math.abs(e.currentTime - t) > 0.7) e.currentTime = t;
+    if (a === 'play') e.play().catch(() => {}); else if (a === 'pause') e.pause();
+  } else {
+    const on = a === 'play' ? true : a === 'pause' ? false : !!M.since;
+    const f = (fn, args = []) => e.contentWindow?.postMessage(JSON.stringify({ event: 'command', func: fn, args }), 'https://www.youtube-nocookie.com');
+    f('seekTo', [t, true]); f(on ? 'playVideo' : 'pauseVideo');
+    M.base = t; M.since = on ? Date.now() : null;
+  }
+}
+function mctl(a, d = 0) {
+  const M = S.movie; if (!M) return;
+  if (M.mode === 'file' && !M.own) return dsend({ k: 'mctl', a, d }); // viewer asks the device that holds the file
+  const t = Math.max(0, cur2() + d);
+  run(a, t);
+  if (M.mode !== 'file') dsend({ k: 'mctl', a, t });
+}
+function mount(m) {
+  const st = $('mv-stage'); st.replaceChildren();
+  const M = (S.movie = { mode: m.mode, own: m.own, base: 0, since: null });
+  if (m.mode === 'yt') {
+    const f = document.createElement('iframe');
+    f.allow = 'autoplay; encrypted-media; fullscreen'; f.referrerPolicy = 'strict-origin-when-cross-origin';
+    f.src = `https://www.youtube-nocookie.com/embed/${m.id}?enablejsapi=1&controls=0&playsinline=1&rel=0&disablekb=1&origin=${encodeURIComponent(location.origin)}`;
+    M.el = f;
+  } else {
+    const v = m.el || document.createElement('video'); v.playsInline = true;
+    if (m.mode === 'url') v.src = m.url;
+    if (m.mode === 'file' && !m.own) v.autoplay = true;
+    M.el = v;
+  }
+  st.append(M.el);
+  $('mv').hidden = false; $('mchoose').hidden = true; $('vp').hidden = true; $('btn-cam').setAttribute('aria-pressed', 'false');
+}
+const renego = async () => { const p = S.pc; await p.setLocalDescription(await p.createOffer()); dsend({ k: 'msdp', d: { type: 'offer', sdp: p.localDescription.sdp } }); };
+function stopMovie(tell) {
+  if (!S.movie) return;
+  if (tell) dsend({ k: 'mstop' });
+  if (S.mstream) {
+    S.mstream.getTracks().forEach((t) => t.stop());
+    S.msend.forEach((x) => { try { S.pc.removeTrack(x); } catch {} });
+    S.mstream = null; renego().catch(() => {});
+  }
+  try { S.movie.el.pause?.(); if (S.movie.el.tagName === 'VIDEO') S.movie.el.srcObject = null; } catch {}
+  S.movie = null; S.msid = null; $('mv-stage').replaceChildren(); $('mv').hidden = true;
+}
+async function movieMsg(x) {
+  if (x.k === 'mstart') {
+    if (S.movie) { if (S.role === 'host') return; stopMovie(false); }
+    const ok = x.mode === 'file' ? typeof x.sid === 'string' : x.mode === 'yt' ? YT.test(x.id) : x.mode === 'url' && parseLink(x.url)?.mode === 'url';
+    if (!ok) return;
+    const what = x.mode === 'file' ? 'a movie from their device' : x.mode === 'yt' ? 'a YouTube video' : 'a video from ' + new URL(x.url).hostname;
+    if (!confirm(`They want to watch ${what} with you. Join?`)) return dsend({ k: 'mstop' });
+    if (x.mode === 'file') S.msid = x.sid;
+    mount({ mode: x.mode, id: x.id, url: x.mode === 'url' ? parseLink(x.url).url : null, own: false });
+  } else if (x.k === 'msdp' && x.d && (x.d.type === 'offer' || x.d.type === 'answer')) {
+    const p = S.pc, d = { type: x.d.type, sdp: String(x.d.sdp) };
+    if (d.type === 'offer') { await p.setRemoteDescription(d); await p.setLocalDescription(await p.createAnswer()); dsend({ k: 'msdp', d: { type: 'answer', sdp: p.localDescription.sdp } }); }
+    else await p.setRemoteDescription(d);
+  } else if (x.k === 'mctl') {
+    const M = S.movie; if (!M || !['play', 'pause', 'seek'].includes(x.a)) return;
+    if (M.mode === 'file') { if (M.own) run(x.a, Math.max(0, cur2() + (+x.d || 0))); }
+    else if (Number.isFinite(x.t)) run(x.a, Math.max(0, x.t));
+  } else if (x.k === 'mstop') stopMovie(false);
+}
+$('btn-movie').onclick = () => { if (S.movie) $('mv').hidden = !$('mv').hidden; else $('mchoose').hidden = !$('mchoose').hidden; };
+$('m-go').onclick = () => {
+  const L = parseLink($('m-link').value);
+  if (!L) return sys('Only YouTube links and direct .mp4 or .webm links work.');
+  if (S.dc?.readyState !== 'open' || S.movie) return sys('Not ready yet, or a movie is already on.');
+  mount({ ...L, own: true }); dsend({ k: 'mstart', ...L }); $('m-link').value = '';
+};
+$('m-file').onchange = async (e) => {
+  const f = e.target.files[0]; e.target.value = ''; if (!f) return;
+  if (S.dc?.readyState !== 'open' || S.movie) return sys('Not ready yet, or a movie is already on.');
+  const v = document.createElement('video'); v.playsInline = true; v.src = URL.createObjectURL(f); S.urls.push(v.src);
+  try { await v.play(); } catch { return sys('Couldn’t play that file.'); }
+  const ms = v.captureStream ? v.captureStream() : v.mozCaptureStream?.();
+  await new Promise((r) => setTimeout(r, 400));
+  if (!ms || !ms.getTracks().length) { v.pause(); return sys('This browser can’t share a file. Try Chrome or Firefox, or paste a link instead.'); }
+  v.pause(); v.currentTime = 0;
+  mount({ mode: 'file', own: true, el: v });
+  S.mstream = ms; S.msend = ms.getTracks().map((t) => S.pc.addTrack(t, ms));
+  dsend({ k: 'mstart', mode: 'file', sid: ms.id });
+  renego().catch(() => stopMovie(true));
+};
+for (const [id, a, d] of [['mv-play', 'play', 0], ['mv-pause', 'pause', 0], ['mv-back', 'seek', -10], ['mv-fwd', 'seek', 10]]) $(id).onclick = () => mctl(a, d);
+$('mv-full').onclick = () => { const m = $('mv'); m.dataset.mode = m.dataset.mode === 'full' ? 'half' : 'full'; };
+$('mv-stop').onclick = () => stopMovie(true);
 $('btn-end').onclick = async () => { await Promise.race([send({ k: 'bye' }), new Promise((r) => setTimeout(r, 300))]); finish('Session ended', 'You ended the chat.', true); };
 $('btn-cancel').onclick = () => finish('Link cancelled', 'Nothing was shared.', false);
 $('btn-copy').onclick = async () => { await navigator.clipboard.writeText($('link').value).catch(() => $('link').select()); $('btn-copy').textContent = 'Copied'; setTimeout(() => ($('btn-copy').textContent = 'Copy link'), 1500); };

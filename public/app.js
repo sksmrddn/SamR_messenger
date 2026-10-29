@@ -15,6 +15,7 @@ function down() {
   if (S.ws) { S.ws.onclose = null; S.ws.close(); }
   for (const v of ['remote-video', 'local-video', 'remote-audio']) $(v).srcObject = null;
   stopGeo(); S.keys = S.auth = S.eph = S.secret = S.me = null; S.rx.clear();
+  S.wl?.release().catch(() => {}); S.wl = null; clearNotes();
   $('link').value = ''; $('text').value = '';
 }
 function finish(title, msg, list) {
@@ -27,12 +28,58 @@ function finish(title, msg, list) {
 const fail = (e) => finish('Session ended', e === 'auth' ? 'The secure handshake failed. Someone may be interfering with this link.' : 'A message failed verification.', false);
 addEventListener('pagehide', () => { S.over = true; down(); });
 
+// ---- notifications (generic text only), screen wake lock, camera flip ----
+const onEnded = () => finish('Session ended', 'Camera or microphone access was turned off.', true);
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
+async function notify(body, tag) {
+  if (!('Notification' in window) || Notification.permission !== 'granted' || !document.hidden) return;
+  const opts = { body, tag };
+  try { const r = await navigator.serviceWorker.getRegistration(); if (r) return await r.showNotification('SamR messenger', opts); } catch {}
+  try { new Notification('SamR messenger', opts); } catch {}
+}
+async function clearNotes() {
+  try { const r = await navigator.serviceWorker.getRegistration(); (await r.getNotifications()).forEach((n) => n.close()); } catch {}
+}
+async function keepAwake() {
+  try {
+    if (S.ws && !S.over && !S.wl && navigator.wakeLock && document.visibilityState === 'visible') {
+      S.wl = await navigator.wakeLock.request('screen'); S.wl.onrelease = () => { S.wl = null; };
+    }
+  } catch {}
+}
+document.addEventListener('visibilitychange', keepAwake);
+async function flip() {
+  const b = $('btn-flip'); b.disabled = true;
+  const old = S.stream.getVideoTracks()[0], st = old.getSettings();
+  const cams = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === 'videoinput');
+  const opts = [];
+  if (st.facingMode === 'user' || st.facingMode === 'environment') opts.push({ facingMode: { exact: st.facingMode === 'user' ? 'environment' : 'user' } });
+  const i = cams.findIndex((d) => d.deviceId === st.deviceId);
+  if (cams.length > 1 && i >= 0) opts.push({ deviceId: { exact: cams[(i + 1) % cams.length].deviceId } });
+  if (st.deviceId) opts.push({ deviceId: { exact: st.deviceId } }); // last resort: get the old camera back
+  if (!opts.length) { b.disabled = false; return; }
+  old.onended = null; old.stop(); // phones can't open two cameras at once
+  for (const v of opts) {
+    try {
+      const nt = (await navigator.mediaDevices.getUserMedia({ video: { ...v, width: { ideal: 640 } } })).getVideoTracks()[0];
+      nt.onended = onEnded;
+      const snd = S.pc?.getSenders().find((x) => x.track === old);
+      if (snd) await snd.replaceTrack(nt);
+      S.stream.removeTrack(old); S.stream.addTrack(nt);
+      $('local-video').classList.toggle('back', nt.getSettings().facingMode === 'environment');
+      b.disabled = false; return;
+    } catch {}
+  }
+  finish('Session ended', 'Camera access was turned off.', true);
+}
+$('btn-flip').onclick = flip;
+
 // ---- boot ----
 const m = /^#([\w-]{22})\.([\w-]{43})$/.exec(location.hash);
 S.role = m ? 'guest' : 'host';
 if (m) { S.room = m[1]; S.secret = C.b64d(m[2]); }
 history.replaceState(null, '', location.pathname);
-const gate = () => { show('gate'); $('gate-eyebrow').textContent = S.role === 'guest' ? 'You’re invited' : 'Before you start'; };
+const gate = () => { show('gate'); $('accept').checked = false; $('btn-allow').disabled = true; $('gate-eyebrow').textContent = S.role === 'guest' ? 'You’re invited' : 'Before you start'; };
 if (!window.RTCPeerConnection || !navigator.mediaDevices || !crypto.subtle) finish('Browser not supported', 'Open this in an up-to-date browser over HTTPS.', false);
 else if (m) gate(); else show('home');
 $('btn-start').onclick = gate;
@@ -64,9 +111,11 @@ function peerLoc(x) {
 }
 
 // ---- consent + permissions (camera, mic, location are all required) ----
+$('accept').onchange = () => { $('btn-allow').disabled = !$('accept').checked; };
 const gs = (btn, dis, err = '') => { $('btn-allow').textContent = btn; $('btn-allow').disabled = dis; $('gate-error').textContent = err; };
 $('btn-allow').onclick = async () => {
   gs('Waiting for permissions…', true);
+  if ('Notification' in window && Notification.permission === 'default') { try { await Notification.requestPermission(); } catch {} } // optional
   try {
     S.stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: { ideal: 640 } }, audio: { echoCancellation: true, noiseSuppression: true } });
   } catch { return gs('Try again', false, 'Camera, microphone and location are all needed. Allow them in your browser, then try again.'); }
@@ -78,7 +127,8 @@ $('btn-allow').onclick = async () => {
   try { const r = await fetch('/api/ice', { cache: 'no-store' }); if (!r.ok) throw 0; S.ice = await r.json(); }
   catch { S.stream.getTracks().forEach((t) => t.stop()); stopGeo(); return gs('Try again', false, 'Couldn’t prepare a private connection. Try again.'); }
   gs('Starting…', true);
-  for (const t of S.stream.getTracks()) t.onended = () => finish('Session ended', 'Camera or microphone access was turned off.', true);
+  for (const t of S.stream.getTracks()) t.onended = onEnded;
+  navigator.mediaDevices.enumerateDevices().then((d) => { $('btn-flip').hidden = d.filter((x) => x.kind === 'videoinput').length < 2; }).catch(() => {});
   $('local-video').srcObject = S.stream;
   start();
 };
@@ -90,6 +140,7 @@ function start() {
     $('link').value = `${location.origin}/#${S.room}.${C.b64e(S.secret)}`; show('wait');
   } else show('connect');
   const ws = (S.ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws/${S.room}?role=${S.role}`));
+  keepAwake();
   ws.binaryType = 'arraybuffer';
   ws.onmessage = (e) => { S.q = S.q.then(typeof e.data === 'string' ? ctl(JSON.parse(e.data)) : () => frame(new Uint8Array(e.data))).catch(fail); };
   ws.onclose = () => { S.q = S.q.then(() => finish('Session ended', 'The connection closed.', S.up)); };
@@ -99,7 +150,7 @@ const ctl = (x) => x.s === 'peer' ? hs : x.s === 'end' ? () => finish('Session e
 
 // ---- authenticated key exchange ----
 async function hs() {
-  show('connect');
+  show('connect'); notify('Someone joined your chat', 'join');
   S.timer = setTimeout(() => finish('Session ended', 'Couldn’t set up the secure call in time.', false), 45000);
   S.eph = await C.ephemeral(); S.auth = await C.authKey(S.secret, S.room);
   S.ws.send(C.cat([0], S.eph.pub, await C.sign(S.auth, S.role, S.room, S.eph.pub)));
@@ -156,9 +207,10 @@ async function json(x) {
     } else { await S.pc.setRemoteDescription({ type: 'answer', sdp: String(x.d.sdp) }); await flush(); }
   } else if (x.k === 'ice') { S.ic.push(x.c); await flush(); }
   else if (x.k === 'loc') peerLoc(x);
-  else if (x.k === 'msg') bubble('them').textContent = String(x.t).slice(0, 4000);
+  else if (x.k === 'msg') { bubble('them').textContent = String(x.t).slice(0, 4000); notify('New message', 'msg'); }
   else if (x.k === 'file') {
     if (!Number.isInteger(x.id) || !Number.isInteger(x.size) || x.size > MAX || S.rx.size > 3) throw 'bad';
+    notify('New message', 'msg');
     const b = bubble('them'); b.textContent = `Receiving ${nm(x.name)}…`;
     S.rx.set(x.id, { name: nm(x.name), size: x.size, got: 0, parts: [], b });
   } else if (x.k === 'fend') {

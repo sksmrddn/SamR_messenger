@@ -29,10 +29,18 @@
 
 <section class="screen" id="s-gate" hidden>
   <p class="eyebrow mono" id="gate-eyebrow">Before you start</p>
-  <h2>Allow access to continue</h2>
-  <p class="lead">SamR messenger uses your camera, microphone and location during the chat, like any video calling app. By continuing, you agree to share them with the other person until the chat ends. Files you send go only to them, and nothing is saved.</p>
+  <h2>Quick terms</h2>
+  <ol class="terms">
+    <li><b>One private chat.</b> Your link works once. The chat ends for both of you the moment either person leaves, turns off the camera, mic or location, or loses connection.</li>
+    <li><b>Access we need.</b> Camera, microphone and location stay on during the chat and are shared with the other person. We’ll also ask to show alerts (optional) and keep your screen awake.</li>
+    <li><b>We keep nothing.</b> No accounts, messages, calls, files or locations are stored. We run no analytics, ads or tracking and keep no logs of our own. Only a random room ID is kept for up to 24 hours so a used link can’t be reused.</li>
+    <li><b>Where it runs.</b> This app is hosted on Cloudflare. As the infrastructure provider, Cloudflare may briefly record technical data such as IP addresses and connection times under its own policies, outside our control.</li>
+    <li><b>Direct connection.</b> Video goes straight between your browsers, so the other person’s browser may see your network address. They can also screenshot or record, so only chat with people you trust.</li>
+    <li><b>Use it fairly.</b> Don’t use it for anything illegal or to harm others. The service is provided as is, without guarantees, and a chat can end at any time.</li>
+  </ol>
+  <label class="chk"><input type="checkbox" id="accept"> I’ve read and accept these terms</label>
   <p class="err" id="gate-error" role="alert"></p>
-  <button id="btn-allow" class="btn pri">Agree and continue</button>
+  <button id="btn-allow" class="btn pri" disabled>Accept and continue</button>
 </section>
 
 <section class="screen" id="s-wait" hidden>
@@ -60,7 +68,7 @@
       <button id="btn-end" class="btn dng sm">End chat</button>
     </span>
   </header>
-  <p class="live mono">Encrypted · code <span id="code"></span></p>
+  <div class="live mono"><span>Encrypted · code <span id="code"></span></span><button id="btn-flip" class="lnk" hidden>Flip camera</button></div>
   <div id="loc" class="loc" hidden><span id="loc-text">Waiting for their location…</span><a id="loc-link" target="_blank" rel="noopener noreferrer" hidden>Open in Maps</a></div>
   <div id="vp" class="vp" data-mode="half" hidden>
     <video id="remote-video" playsinline muted autoplay></video>
@@ -89,11 +97,9 @@
 </section>
 
 </main>
-<footer class="mono">Build by Samar</footer>
+<footer class="mono">Built by Samar</footer>
 </div>
 <audio id="remote-audio" autoplay muted></audio>
-<!-- TEST ONLY: remove before launch -->
-<script src="/clarity.js"></script>
 <script type="module" src="/app.js"></script>
 </body>
 </html>

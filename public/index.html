@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="referrer" content="no-referrer">
+<meta name="robots" content="noindex">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#0C0D0E">
+<title>SamR messenger</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<div id="app">
+<main>
+
+<section class="screen" id="s-home">
+  <p class="eyebrow mono"><i class="dot"></i>No account · No history</p>
+  <h1>SamR messenger</h1>
+  <p class="lead">Start a private video chat. One link, used once, encrypted end to end. When the chat ends, everything is gone.</p>
+  <button id="btn-start" class="btn pri">Start a private chat</button>
+  <ul class="notes">
+    <li>The link works once. If someone else opens it first, it’s dead.</li>
+    <li>Either person leaving ends the chat for both, permanently.</li>
+    <li>Nothing is stored. No accounts, no history.</li>
+  </ul>
+</section>
+
+<section class="screen" id="s-gate" hidden>
+  <p class="eyebrow mono" id="gate-eyebrow">Before you start</p>
+  <h2>Quick terms</h2>
+  <ol class="terms">
+    <li><b>One private chat.</b> Your link works once. The chat ends for both of you when either person leaves, switches off camera, mic or location, or loses connection.</li>
+    <li><b>Access.</b> Camera, mic and location stay on during the chat and are shared with the other person. We may also ask to show alerts and keep your screen awake.</li>
+    <li><b>We keep nothing.</b> No accounts, messages, calls, files or locations are stored, and we run no analytics, ads, tracking or logs of our own. Only a random room ID is kept for up to 24 hours so a used link can’t be reused.</li>
+    <li><b>Where it runs.</b> Hosted on Cloudflare, which as the infrastructure provider may briefly record technical data such as IP addresses and connection times under its own policies.</li>
+    <li><b>Direct connection.</b> Calls and movies go straight between your browsers, so the other person’s browser may see your network address. They can also screenshot or record, so chat only with people you trust. Movie links load from the video site itself (like YouTube), which can see you watching.</li>
+    <li><b>Fair use.</b> Don’t use it for anything illegal or to harm others. It’s provided as is, and a chat can end at any time.</li>
+  </ol>
+  <div class="gbar">
+    <p class="err" id="gate-error" role="alert"></p>
+    <button id="btn-allow" class="btn pri">Accept and continue</button>
+  </div>
+</section>
+
+<section class="screen" id="s-wait" hidden>
+  <p class="eyebrow mono">Waiting for the other person</p>
+  <h2>Share this link</h2>
+  <p class="lead">It works once. Keep this tab open; closing it kills the link.</p>
+  <input id="link" class="link mono" readonly aria-label="One-time link">
+  <button id="btn-copy" class="btn pri">Copy link</button>
+  <button id="btn-cancel" class="btn">Cancel</button>
+</section>
+
+<section class="screen" id="s-connect" hidden>
+  <p class="eyebrow mono">Connecting</p>
+  <h2>Securing the connection…</h2>
+  <p class="lead">Exchanging keys and opening the encrypted call.</p>
+</section>
+
+<section class="screen chat" id="s-chat" hidden>
+  <header>
+    <span class="peer mono"><i class="dot"></i><span id="peer"></span></span>
+    <span class="acts">
+      <button id="btn-cam" class="ib" aria-label="View their camera" aria-pressed="false"><svg viewBox="0 0 24 24"><path d="M15 10l5-3v10l-5-3"/><rect x="2" y="6" width="13" height="12" rx="2"/></svg></button>
+      <button id="btn-mic" class="ib" aria-label="Hear their microphone" aria-pressed="false"><svg viewBox="0 0 24 24"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0014 0M12 18v4"/></svg></button>
+      <button id="btn-loc" class="ib" aria-label="See their location" aria-pressed="false"><svg viewBox="0 0 24 24"><path d="M12 21s-7-6.2-7-11a7 7 0 0114 0c0 4.8-7 11-7 11z"/><circle cx="12" cy="10" r="2.5"/></svg></button>
+      <button id="btn-end" class="btn dng sm">End chat</button>
+    </span>
+  </header>
+  <div class="live mono"><span>Encrypted · code <span id="code"></span></span><span class="lnks"><button id="btn-movie" class="lnk">Movie</button></span></div>
+  <div id="loc" class="loc" hidden><span id="loc-text">Waiting for their location…</span><a id="loc-link" target="_blank" rel="noopener noreferrer" hidden>Open in Maps</a></div>
+  <div id="mchoose" class="loc" hidden>
+    <label class="btn sm">Pick a file<input type="file" id="m-file" accept="video/*" hidden></label>
+    <input id="m-link" type="text" class="mi" placeholder="YouTube or .mp4 link" aria-label="Video link" autocomplete="off">
+    <button id="m-go" class="btn sm">Play link</button>
+    <small>Files stream straight from your device to theirs. Links load on each device. Nothing goes through our server.</small>
+  </div>
+  <div id="mv" class="vp" data-mode="half" hidden>
+    <div id="mv-stage"></div>
+    <div class="vc"><button id="mv-play" class="btn sm">Play</button><button id="mv-pause" class="btn sm">Pause</button><button id="mv-back" class="btn sm">−10s</button><button id="mv-fwd" class="btn sm">+10s</button><button id="mv-full" class="btn sm">Full</button><button id="mv-stop" class="btn sm">Stop</button></div>
+  </div>
+  <div id="vp" class="vp" data-mode="half" hidden>
+    <video id="remote-video" playsinline muted autoplay></video>
+    <video id="local-video" class="self" playsinline muted autoplay></video>
+    <div class="vc"><button id="vp-half" class="btn sm">Half</button><button id="vp-full" class="btn sm">Full</button><button id="vp-close" class="btn sm">Close</button></div>
+  </div>
+  <div id="messages" class="msgs" aria-live="polite"></div>
+  <div class="comp">
+    <label class="ib" aria-label="Attach file"><svg viewBox="0 0 24 24"><path d="M21 11.5l-8.6 8.6a5 5 0 01-7.1-7.1l9-9a3.5 3.5 0 014.9 4.9l-8.7 8.7a2 2 0 01-2.8-2.8l8-8"/></svg><input type="file" id="file" hidden></label>
+    <button id="btn-nudge" class="ib" aria-label="Nudge"><svg viewBox="0 0 24 24"><rect x="8" y="3" width="8" height="18" rx="2"/><path d="M4 8v8M20 8v8"/></svg></button>
+    <input id="text" type="text" maxlength="4000" placeholder="Message…" aria-label="Message" autocomplete="off">
+    <button id="btn-send" class="ib pri" aria-label="Send"><svg viewBox="0 0 24 24"><path d="M4 12h16M14 6l6 6-6 6"/></svg></button>
+  </div>
+</section>
+
+<section class="screen" id="s-end" hidden>
+  <p class="eyebrow mono">SamR messenger</p>
+  <h2 id="end-title"></h2>
+  <p class="lead" id="end-msg"></p>
+  <ul class="notes" id="end-list" hidden>
+    <li>Encryption keys discarded</li>
+    <li>Messages wiped from this page</li>
+    <li>Link permanently invalid</li>
+    <li>Camera, mic and location released</li>
+  </ul>
+  <button id="btn-new" class="btn pri">Start a new chat</button>
+</section>
+
+</main>
+<footer class="mono">Built by Samar</footer>
+</div>
+<audio id="remote-audio" autoplay muted></audio>
+<script type="module" src="/app.js"></script>
+</body>
+</html>

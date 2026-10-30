@@ -55,7 +55,6 @@ footer{text-align:center;font-size:12px;color:var(--d);padding:8px 16px calc(8px
 .chk{display:flex;align-items:center;gap:10px;min-height:44px;font-size:14px;cursor:pointer}
 .chk input{width:20px;height:20px;accent-color:var(--a);flex:none}
 .lnk{background:none;border:0;color:var(--a);font:inherit;cursor:pointer;padding:4px 0 4px 12px;min-height:32px}
-.vp .self.back{transform:none}
 .lnks{display:flex;gap:4px}
 label.btn{display:inline-flex;align-items:center}
 .mi{flex:1;min-width:140px;background:var(--p2);border:1px solid var(--l2);border-radius:10px;color:var(--t);padding:0 12px;min-height:36px;font:inherit}

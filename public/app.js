@@ -1,7 +1,7 @@
 import * as C from './crypto.js';
 const $ = (i) => document.getElementById(i), te = new TextEncoder(), td = new TextDecoder();
 const MAX = 25 << 20, CH = 48 << 10;
-const S = { over: false, up: false, rx: new Map(), urls: [], ic: [], q: Promise.resolve(), tx: Promise.resolve(), n: 0, r: 0, fid: 0, ls: 0, ln: 0, facing: 'user' };
+const S = { over: false, up: false, rx: new Map(), urls: [], ic: [], q: Promise.resolve(), tx: Promise.resolve(), n: 0, r: 0, fid: 0, ls: 0, ln: 0 };
 const show = (n) => { for (const s of document.querySelectorAll('.screen')) s.hidden = s.id !== 's-' + n; };
 const kb = (n) => (n > 1 << 20 ? (n / (1 << 20)).toFixed(1) + ' MB' : Math.ceil(n / 1024) + ' KB');
 const nm = (s) => String(s).replace(/[\\/\u0000-\u001f<>:"|?*]/g, '_').slice(0, 120) || 'file';
@@ -29,7 +29,7 @@ function finish(title, msg, list) {
 const fail = (e) => finish('Session ended', e === 'auth' ? 'The secure handshake failed. Someone may be interfering with this link.' : 'A message failed verification.', false);
 addEventListener('pagehide', () => { S.over = true; down(); });
 
-// ---- notifications (generic text only), screen wake lock, camera flip ----
+// ---- notifications (generic text only) and screen wake lock ----
 const onEnded = () => finish('Session ended', 'Camera or microphone access was turned off.', true);
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
 async function notify(body, tag, vibrate) {
@@ -49,32 +49,6 @@ async function keepAwake() {
   } catch {}
 }
 document.addEventListener('visibilitychange', keepAwake);
-async function flip() {
-  const b = $('btn-flip'); b.disabled = true;
-  const old = S.stream.getVideoTracks()[0], st = old.getSettings();
-  const cur = st.facingMode || S.facing;
-  const cams = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === 'videoinput');
-  const i = cams.findIndex((d) => d.deviceId === st.deviceId);
-  const opts = [{ facingMode: { exact: cur === 'user' ? 'environment' : 'user' } }];
-  if (cams.length > 1 && i >= 0) opts.push({ deviceId: { exact: cams[(i + 1) % cams.length].deviceId } });
-  const back = st.deviceId ? { deviceId: { exact: st.deviceId } } : { facingMode: cur };
-  old.onended = null; old.stop(); // phones can't open two cameras at once
-  for (const v of [...opts, back]) {
-    try {
-      const nt = (await navigator.mediaDevices.getUserMedia({ video: { ...v, width: { ideal: 640 } } })).getVideoTracks()[0];
-      nt.onended = onEnded;
-      const snd = S.pc?.getSenders().find((x) => x.track === old);
-      if (snd) await snd.replaceTrack(nt);
-      S.stream.removeTrack(old); S.stream.addTrack(nt);
-      S.facing = nt.getSettings().facingMode || (v.facingMode ? v.facingMode.exact : S.facing);
-      $('local-video').classList.toggle('back', S.facing === 'environment');
-      if (v === back) sys('No other camera found.');
-      b.disabled = false; return;
-    } catch {}
-  }
-  finish('Session ended', 'Camera access was turned off.', true);
-}
-$('btn-flip').onclick = flip;
 
 // ---- boot ----
 const m = /^#([\w-]{22})\.([\w-]{43})$/.exec(location.hash);
@@ -129,8 +103,6 @@ $('btn-allow').onclick = async () => {
   catch { S.stream.getTracks().forEach((t) => t.stop()); stopGeo(); return gs('Try again', false, 'Couldn’t prepare a private connection. Try again.'); }
   gs('Starting…', true);
   for (const t of S.stream.getTracks()) t.onended = onEnded;
-  $('btn-flip').hidden = !(navigator.maxTouchPoints > 0);
-  navigator.mediaDevices.enumerateDevices().then((d) => { if (d.filter((x) => x.kind === 'videoinput').length > 1) $('btn-flip').hidden = false; }).catch(() => {});
   $('local-video').srcObject = S.stream;
   start();
 };
